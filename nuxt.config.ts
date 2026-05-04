@@ -2,8 +2,7 @@
 export default defineNuxtConfig({
   compatibilityDate: '2024-04-03',
   devtools: { enabled: true },
-  
-  // 針對 ffmpeg.wasm 的跨域隔離設定
+  modules: ['@nuxtjs/tailwindcss'], // 加入這行
   routeRules: {
     '/**': {
       headers: {

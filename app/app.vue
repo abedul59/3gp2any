@@ -1,25 +1,82 @@
 <template>
-  <div class="container">
-    <h1>3GP/3GPP 轉 MP3 轉換器</h1>
-    
-    <!-- 限制選擇的檔案類型包含 .3gpp -->
-    <input 
-      type="file" 
-      accept=".3gp, .3gpp, audio/3gpp, video/3gpp" 
-      @change="handleFileChange"
-      :disabled="isProcessing"
-    />
+  <div class="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8 font-sans">
+    <div class="max-w-3xl mx-auto space-y-8">
+      
+      <!-- 標題區塊 -->
+      <div class="text-center">
+        <h1 class="text-3xl font-extrabold text-gray-900 tracking-tight sm:text-4xl">
+          3GP 語音轉檔神器
+        </h1>
+        <p class="mt-3 text-lg text-gray-500">
+          支援 3GP / 3GPP 轉 MP3。自動為您選擇最快的轉檔路徑。
+        </p>
+      </div>
 
-    <div v-if="isProcessing">
-      <p>處理中 ({{ processMode }})... 請勿關閉網頁</p>
-      <!-- 如果是 WASM 模式可以顯示精準進度 -->
-      <progress v-if="processMode === '本地運算'" :value="progress" max="100"></progress>
-    </div>
+      <!-- 上傳區塊 -->
+      <div 
+        class="mt-8 flex justify-center px-6 pt-10 pb-12 border-2 border-gray-300 border-dashed rounded-xl bg-white hover:border-indigo-500 hover:bg-indigo-50 transition-colors duration-200"
+      >
+        <div class="space-y-1 text-center">
+          <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true">
+            <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <div class="flex justify-center text-sm text-gray-600 mt-4">
+            <label for="file-upload" class="relative cursor-pointer bg-white rounded-md font-medium text-indigo-600 hover:text-indigo-500 focus-within:outline-none focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-indigo-500">
+              <span class="px-2">選擇多個檔案</span>
+              <!-- 加上 multiple 屬性支援多選 -->
+              <input 
+                id="file-upload" 
+                name="file-upload" 
+                type="file" 
+                class="sr-only" 
+                accept=".3gp, .3gpp, audio/3gpp, video/3gpp" 
+                multiple
+                @change="handleFileChange"
+              />
+            </label>
+            <p class="pl-1">或直接拖曳至此</p>
+          </div>
+          <p class="text-xs text-gray-500 mt-2">最高支援單檔 500MB</p>
+        </div>
+      </div>
 
-    <div v-if="downloadUrl">
-      <a :href="downloadUrl" download="converted_audio.mp3">
-        <button>下載轉檔結果</button>
-      </a>
+      <!-- 檔案列表與進度區塊 -->
+      <div v-if="fileList.length > 0" class="bg-white shadow sm:rounded-lg">
+        <div class="px-4 py-5 sm:p-6">
+          <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">轉檔佇列</h3>
+          <ul class="divide-y divide-gray-200">
+            <li v-for="item in fileList" :key="item.id" class="py-4">
+              <div class="flex items-center justify-between">
+                <div class="flex flex-col truncate w-1/2">
+                  <span class="text-sm font-medium text-gray-900 truncate">{{ item.name }}</span>
+                  <span class="text-xs text-gray-500">{{ item.size }} | {{ item.mode }}</span>
+                </div>
+                
+                <!-- 狀態與下載按鈕 -->
+                <div class="flex items-center space-x-4">
+                  <span v-if="item.status === 'idle'" class="text-xs text-gray-400">等待中</span>
+                  <span v-else-if="item.status === 'processing'" class="text-xs font-semibold text-blue-600 animate-pulse">轉檔中 {{ item.progress }}%</span>
+                  <span v-else-if="item.status === 'error'" class="text-xs font-semibold text-red-600">失敗</span>
+                  
+                  <a v-if="item.status === 'done'" :href="item.url" :download="getDownloadName(item.name)" class="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none">
+                    下載 MP3
+                  </a>
+                </div>
+              </div>
+
+              <!-- 進度條 -->
+              <div class="mt-2 w-full bg-gray-200 rounded-full h-2.5">
+                <div 
+                  class="h-2.5 rounded-full transition-all duration-300"
+                  :class="item.status === 'done' ? 'bg-green-600' : (item.status === 'error' ? 'bg-red-600' : 'bg-blue-600')"
+                  :style="{ width: item.status === 'done' ? '100%' : item.progress + '%' }"
+                ></div>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </div>
+
     </div>
   </div>
 </template>
@@ -29,83 +86,130 @@ import { ref, onMounted } from 'vue'
 import { FFmpeg } from '@ffmpeg/ffmpeg'
 import { fetchFile } from '@ffmpeg/util'
 
-const isProcessing = ref(false)
-const progress = ref(0)
-const downloadUrl = ref(null)
-const processMode = ref('') // '本地運算' 或 '伺服器運算'
-
+// 狀態管理：儲存所有選取的檔案
+const fileList = ref([])
 let ffmpeg = null
+let currentProcessingItem = null // 追蹤目前正在用 WASM 轉檔的物件，方便更新進度
 
-// 初始化 WASM
+// 初始載入 WASM 核心
 onMounted(async () => {
   ffmpeg = new FFmpeg()
+  
+  // 監聽 WASM 轉檔進度，並更新到對應的檔案物件上
   ffmpeg.on('progress', ({ ratio }) => {
-    progress.value = Math.round(ratio * 100)
+    if (currentProcessingItem) {
+      currentProcessingItem.progress = Math.min(Math.round(ratio * 100), 99)
+    }
   })
-  // 從 CDN 載入核心，加快初次載入速度
+  
   await ffmpeg.load({
     coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
     wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm',
   })
 })
 
-const handleFileChange = async (event) => {
-  const file = event.target.files[0]
-  if (!file) return
+// 處理選擇檔案 (支援多選)
+const handleFileChange = (event) => {
+  const files = Array.from(event.target.files)
+  if (files.length === 0) return
 
-  isProcessing.value = true
-  downloadUrl.value = null
-  progress.value = 0
+  // 將選取的檔案加入清單
+  files.forEach(file => {
+    fileList.value.push({
+      id: Math.random().toString(36).substring(7), // 產生隨機 ID
+      name: file.name,
+      size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
+      rawFile: file,
+      status: 'idle', // 狀態: idle, processing, done, error
+      progress: 0,
+      mode: '評估中...',
+      url: null
+    })
+  })
 
-  // 1. 智慧分流判斷邏輯
-  const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
-  const isLargeFile = file.size > 50 * 1024 * 1024 // 門檻設為 50MB
+  // 清空 input 值，讓下次選同一個檔案也能觸發 change 事件
+  event.target.value = ''
 
-  try {
-    if (isMobile || isLargeFile) {
-      processMode.value = '伺服器運算'
-      await processOnHFServer(file)
-    } else {
-      processMode.value = '本地運算'
-      await processOnWasm(file)
-    }
-  } catch (error) {
-    console.error("轉檔失敗:", error)
-    alert("轉檔過程發生錯誤，請重試。")
-  } finally {
-    isProcessing.value = false
-  }
+  // 啟動佇列處理器
+  processQueue()
 }
 
-// 處理路徑 A: WASM (純前端)
-const processOnWasm = async (file) => {
-  // 核心技巧：不管原檔名是 .3gpp 還是什麼，寫入 MEMFS 時一律叫 input.3gp
-  await ffmpeg.writeFile('input.3gp', await fetchFile(file))
+// 自動更換副檔名為 .mp3
+const getDownloadName = (originalName) => {
+  return originalName.replace(/\.3gpp?$/i, '.mp3')
+}
+
+// 核心邏輯：佇列處理器 (保證一個一個轉，防止當機)
+let isQueueRunning = false
+const processQueue = async () => {
+  if (isQueueRunning) return
+  isQueueRunning = true
+
+  // 找尋還沒處理的檔案
+  for (const item of fileList.value) {
+    if (item.status !== 'idle') continue
+
+    item.status = 'processing'
+    item.progress = 0
+
+    // 智慧分流判斷
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
+    const isLargeFile = item.rawFile.size > 50 * 1024 * 1024 // > 50MB
+
+    try {
+      if (isMobile || isLargeFile) {
+        item.mode = '雲端加速'
+        await processOnHFServer(item)
+      } else {
+        item.mode = '本機運算'
+        await processOnWasm(item)
+      }
+      item.status = 'done'
+      item.progress = 100
+    } catch (error) {
+      console.error(`檔案 ${item.name} 轉檔失敗:`, error)
+      item.status = 'error'
+    }
+  }
+
+  isQueueRunning = false
+}
+
+// 處理路徑 A: WASM (傳入整個 item 物件以便更新狀態)
+const processOnWasm = async (item) => {
+  currentProcessingItem = item
+  await ffmpeg.writeFile('input.3gp', await fetchFile(item.rawFile))
   
-  // 執行轉檔
   await ffmpeg.exec(['-i', 'input.3gp', '-vn', '-ar', '44100', '-ac', '2', '-b:a', '192k', 'output.mp3'])
   
   const data = await ffmpeg.readFile('output.mp3')
   const blob = new Blob([data.buffer], { type: 'audio/mpeg' })
-  downloadUrl.value = URL.createObjectURL(blob)
+  item.url = URL.createObjectURL(blob)
+  
+  currentProcessingItem = null // 釋放
 }
 
-// 處理路徑 B: Hugging Face (後端 API)
-const processOnHFServer = async (file) => {
-  const formData = new FormData()
-  // 核心技巧：在 FormData 附加檔案時，強制覆蓋檔名為 input.3gp
-  formData.append('file', file, 'input.3gp')
+// 處理路徑 B: Hugging Face API
+const processOnHFServer = async (item) => {
+  // 模擬雲端上傳與處理的假進度 (因為 fetch 無法精確追蹤上傳進度，用計時器提升體驗)
+  const progressInterval = setInterval(() => {
+    if (item.progress < 90) item.progress += 5
+  }, 1000)
 
-  // 請替換為你 Hugging Face Space 的 Direct URL (不是外觀網址)
-  // 通常格式為：https://你的帳號-專案名.hf.space/api/convert
+  const formData = new FormData()
+  formData.append('file', item.rawFile, 'input.3gp')
+
+  // 🔴 請記得換成你的 Hugging Face URL
   const response = await fetch('https://lawxstudents168-3gp2mp3-api.hf.space/api/convert', {
     method: 'POST',
     body: formData
   })
 
-  if (!response.ok) throw new Error('伺服器轉檔失敗')
+  clearInterval(progressInterval)
+
+  if (!response.ok) throw new Error('雲端轉檔失敗')
 
   const blob = await response.blob()
-  downloadUrl.value = URL.createObjectURL(blob)
+  item.url = URL.createObjectURL(blob)
 }
 </script>
