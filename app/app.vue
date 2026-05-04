@@ -98,7 +98,7 @@ const processOnHFServer = async (file) => {
 
   // 請替換為你 Hugging Face Space 的 Direct URL (不是外觀網址)
   // 通常格式為：https://你的帳號-專案名.hf.space/api/convert
-  const response = await fetch('https://YOUR_HF_SPACE_URL/api/convert', {
+  const response = await fetch('https://lawxstudents168-3gp2mp3-api.hf.space/api/convert', {
     method: 'POST',
     body: formData
   })
