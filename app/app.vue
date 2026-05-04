@@ -44,7 +44,7 @@
         正在初始化轉檔核心引擎，請稍候...
       </div>
       <div v-if="ffmpegLoadError" class="text-center text-sm text-red-600">
-        核心引擎載入失敗，本地轉檔可能無法使用。
+        本地核心載入失敗，將全面啟用雲端加速轉檔。
       </div>
 
       <!-- 檔案列表與進度區塊 -->
@@ -91,7 +91,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { FFmpeg } from '@ffmpeg/ffmpeg'
-import { fetchFile, toBlobURL } from '@ffmpeg/util' // 確保引入 toBlobURL
+import { fetchFile, toBlobURL } from '@ffmpeg/util'
 
 // --- 狀態管理 ---
 const fileList = ref([])
@@ -113,23 +113,27 @@ onMounted(async () => {
   })
   
   try {
-    // 定義 CDN 基礎網址
-    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd'
+    // 終極修復：1. 指定明確的 UMD 版本路徑
+    const coreURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js'
+    const wasmURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
     
-    // 使用 toBlobURL 將遠端檔案轉為本機 Blob，完美繞過 Worker 的跨域限制
-    const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript')
-    const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm')
+    // 終極修復：2. 加上時間戳記作為 Cache Buster，強迫抓取最新未損壞的檔案
+    const cacheBuster = `?v=${new Date().getTime()}`
+    
+    // 終極修復：3. 使用 toBlobURL 繞過 Worker 的跨域限制
+    const blobCoreURL = await toBlobURL(`${coreURL}${cacheBuster}`, 'text/javascript')
+    const blobWasmURL = await toBlobURL(`${wasmURL}${cacheBuster}`, 'application/wasm')
     
     await ffmpeg.load({
-      coreURL: coreURL,
-      wasmURL: wasmURL,
+      coreURL: blobCoreURL,
+      wasmURL: blobWasmURL,
     })
     
     isFfmpegLoaded.value = true
     console.log("✅ FFmpeg 核心載入成功！")
   } catch (error) {
     console.error("❌ FFmpeg 核心載入失敗:", error)
-    ffmpegLoadError.value = true
+    ffmpegLoadError.value = true // 標記失敗，後續所有任務交由 HF 處理
   }
 })
 
@@ -138,25 +142,21 @@ const handleFileChange = (event) => {
   const files = Array.from(event.target.files)
   if (files.length === 0) return
 
-  // 將檔案加入佇列
   files.forEach(file => {
     fileList.value.push({
       id: Math.random().toString(36).substring(7),
       name: file.name,
       size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
       rawFile: file,
-      status: 'idle', // idle, processing, done, error
+      status: 'idle', 
       progress: 0,
       mode: '等待分配...',
       url: null
     })
   })
 
-  // 清空 input 讓下次選同檔也能觸發
-  event.target.value = ''
-
-  // 觸發佇列處理
-  processQueue()
+  event.target.value = '' // 清空 input
+  processQueue() // 觸發佇列
 }
 
 // 自動將副檔名改為 mp3
@@ -164,7 +164,7 @@ const getDownloadName = (originalName) => {
   return originalName.replace(/\.3gpp?$/i, '.mp3')
 }
 
-// --- 核心佇列處理器 (確保循序執行，防止記憶體崩潰) ---
+// --- 核心佇列處理器 ---
 let isQueueRunning = false
 const processQueue = async () => {
   if (isQueueRunning) return
@@ -176,11 +176,11 @@ const processQueue = async () => {
     item.status = 'processing'
     item.progress = 0
 
-    // 智慧分流判斷
     const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
     const isLargeFile = item.rawFile.size > 50 * 1024 * 1024 // 50MB 門檻
 
     try {
+      // 如果是手機、大檔案，或者本地核心剛好載入失敗，一律丟給雲端
       if (isMobile || isLargeFile || !isFfmpegLoaded.value) {
         item.mode = '☁️ 雲端加速'
         await processOnHFServer(item)
@@ -203,13 +203,11 @@ const processQueue = async () => {
 const processOnWasm = async (item) => {
   currentProcessingItem = item
   
-  // 強制更名為 input.3gp 寫入記憶體
+  // 強制更名為 input.3gp 寫入記憶體，解決 3gpp 辨識問題
   await ffmpeg.writeFile('input.3gp', await fetchFile(item.rawFile))
   
-  // 執行轉檔 (-y 覆寫, -vn 去影像, -ar 採樣率, -ac 聲道, -b:a 位元率)
   await ffmpeg.exec(['-y', '-i', 'input.3gp', '-vn', '-ar', '44100', '-ac', '2', '-b:a', '192k', 'output.mp3'])
   
-  // 讀取結果
   const data = await ffmpeg.readFile('output.mp3')
   const blob = new Blob([data.buffer], { type: 'audio/mpeg' })
   item.url = URL.createObjectURL(blob)
@@ -219,17 +217,15 @@ const processOnWasm = async (item) => {
 
 // --- 轉檔路徑 B: Hugging Face API (後端) ---
 const processOnHFServer = async (item) => {
-  // 模擬進度條提升 UX
   const progressInterval = setInterval(() => {
     if (item.progress < 90) item.progress += 5
   }, 1500)
 
   const formData = new FormData()
-  formData.append('file', item.rawFile, 'input.3gp')
+  formData.append('file', item.rawFile, 'input.3gp') // 傳輸時覆寫檔名
 
   try {
-    // 🔴 記得把這裡替換成你 Hugging Face 的真實 Direct URL！
-    // 範例：https://nickhwang-3gp2any.hf.space/api/convert
+    // 🔴 這裡請填入你的 Hugging Face API 直連網址！
     const response = await fetch('https://lawxstudents168-3gp2mp3-api.hf.space/api/convert', {
       method: 'POST',
       body: formData
