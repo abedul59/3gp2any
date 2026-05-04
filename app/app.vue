@@ -23,7 +23,6 @@
           <div class="flex justify-center text-sm text-gray-600 mt-4">
             <label for="file-upload" class="relative cursor-pointer bg-white rounded-md font-medium text-indigo-600 hover:text-indigo-500 focus-within:outline-none focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-indigo-500">
               <span class="px-2">選擇多個檔案</span>
-              <!-- 加上 multiple 屬性支援多選 -->
               <input 
                 id="file-upload" 
                 name="file-upload" 
@@ -38,6 +37,14 @@
           </div>
           <p class="text-xs text-gray-500 mt-2">最高支援單檔 500MB</p>
         </div>
+      </div>
+
+      <!-- 核心載入狀態提示 -->
+      <div v-if="!isFfmpegLoaded && !ffmpegLoadError" class="text-center text-sm text-blue-600 animate-pulse">
+        正在初始化轉檔核心引擎，請稍候...
+      </div>
+      <div v-if="ffmpegLoadError" class="text-center text-sm text-red-600">
+        核心引擎載入失敗，本地轉檔可能無法使用。
       </div>
 
       <!-- 檔案列表與進度區塊 -->
@@ -84,68 +91,85 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { FFmpeg } from '@ffmpeg/ffmpeg'
-import { fetchFile } from '@ffmpeg/util'
+import { fetchFile, toBlobURL } from '@ffmpeg/util' // 確保引入 toBlobURL
 
-// 狀態管理：儲存所有選取的檔案
+// --- 狀態管理 ---
 const fileList = ref([])
-let ffmpeg = null
-let currentProcessingItem = null // 追蹤目前正在用 WASM 轉檔的物件，方便更新進度
+const isFfmpegLoaded = ref(false)
+const ffmpegLoadError = ref(false)
 
-// 初始載入 WASM 核心
+let ffmpeg = null
+let currentProcessingItem = null // 追蹤目前正在用 WASM 轉檔的物件
+
+// --- 初始化 FFmpeg ---
 onMounted(async () => {
   ffmpeg = new FFmpeg()
   
-  // 監聽 WASM 轉檔進度，並更新到對應的檔案物件上
+  // 監聽 WASM 轉檔進度
   ffmpeg.on('progress', ({ ratio }) => {
-    if (currentProcessingItem) {
+    if (currentProcessingItem && currentProcessingItem.status === 'processing') {
       currentProcessingItem.progress = Math.min(Math.round(ratio * 100), 99)
     }
   })
   
-  await ffmpeg.load({
-    coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
-    wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm',
-  })
+  try {
+    // 定義 CDN 基礎網址
+    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd'
+    
+    // 使用 toBlobURL 將遠端檔案轉為本機 Blob，完美繞過 Worker 的跨域限制
+    const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript')
+    const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm')
+    
+    await ffmpeg.load({
+      coreURL: coreURL,
+      wasmURL: wasmURL,
+    })
+    
+    isFfmpegLoaded.value = true
+    console.log("✅ FFmpeg 核心載入成功！")
+  } catch (error) {
+    console.error("❌ FFmpeg 核心載入失敗:", error)
+    ffmpegLoadError.value = true
+  }
 })
 
-// 處理選擇檔案 (支援多選)
+// --- 處理選擇檔案 ---
 const handleFileChange = (event) => {
   const files = Array.from(event.target.files)
   if (files.length === 0) return
 
-  // 將選取的檔案加入清單
+  // 將檔案加入佇列
   files.forEach(file => {
     fileList.value.push({
-      id: Math.random().toString(36).substring(7), // 產生隨機 ID
+      id: Math.random().toString(36).substring(7),
       name: file.name,
       size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
       rawFile: file,
-      status: 'idle', // 狀態: idle, processing, done, error
+      status: 'idle', // idle, processing, done, error
       progress: 0,
-      mode: '評估中...',
+      mode: '等待分配...',
       url: null
     })
   })
 
-  // 清空 input 值，讓下次選同一個檔案也能觸發 change 事件
+  // 清空 input 讓下次選同檔也能觸發
   event.target.value = ''
 
-  // 啟動佇列處理器
+  // 觸發佇列處理
   processQueue()
 }
 
-// 自動更換副檔名為 .mp3
+// 自動將副檔名改為 mp3
 const getDownloadName = (originalName) => {
   return originalName.replace(/\.3gpp?$/i, '.mp3')
 }
 
-// 核心邏輯：佇列處理器 (保證一個一個轉，防止當機)
+// --- 核心佇列處理器 (確保循序執行，防止記憶體崩潰) ---
 let isQueueRunning = false
 const processQueue = async () => {
   if (isQueueRunning) return
   isQueueRunning = true
 
-  // 找尋還沒處理的檔案
   for (const item of fileList.value) {
     if (item.status !== 'idle') continue
 
@@ -154,14 +178,14 @@ const processQueue = async () => {
 
     // 智慧分流判斷
     const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
-    const isLargeFile = item.rawFile.size > 50 * 1024 * 1024 // > 50MB
+    const isLargeFile = item.rawFile.size > 50 * 1024 * 1024 // 50MB 門檻
 
     try {
-      if (isMobile || isLargeFile) {
-        item.mode = '雲端加速'
+      if (isMobile || isLargeFile || !isFfmpegLoaded.value) {
+        item.mode = '☁️ 雲端加速'
         await processOnHFServer(item)
       } else {
-        item.mode = '本機運算'
+        item.mode = '💻 本機運算'
         await processOnWasm(item)
       }
       item.status = 'done'
@@ -175,41 +199,48 @@ const processQueue = async () => {
   isQueueRunning = false
 }
 
-// 處理路徑 A: WASM (傳入整個 item 物件以便更新狀態)
+// --- 轉檔路徑 A: WASM (純前端) ---
 const processOnWasm = async (item) => {
   currentProcessingItem = item
+  
+  // 強制更名為 input.3gp 寫入記憶體
   await ffmpeg.writeFile('input.3gp', await fetchFile(item.rawFile))
   
-  await ffmpeg.exec(['-i', 'input.3gp', '-vn', '-ar', '44100', '-ac', '2', '-b:a', '192k', 'output.mp3'])
+  // 執行轉檔 (-y 覆寫, -vn 去影像, -ar 採樣率, -ac 聲道, -b:a 位元率)
+  await ffmpeg.exec(['-y', '-i', 'input.3gp', '-vn', '-ar', '44100', '-ac', '2', '-b:a', '192k', 'output.mp3'])
   
+  // 讀取結果
   const data = await ffmpeg.readFile('output.mp3')
   const blob = new Blob([data.buffer], { type: 'audio/mpeg' })
   item.url = URL.createObjectURL(blob)
   
-  currentProcessingItem = null // 釋放
+  currentProcessingItem = null
 }
 
-// 處理路徑 B: Hugging Face API
+// --- 轉檔路徑 B: Hugging Face API (後端) ---
 const processOnHFServer = async (item) => {
-  // 模擬雲端上傳與處理的假進度 (因為 fetch 無法精確追蹤上傳進度，用計時器提升體驗)
+  // 模擬進度條提升 UX
   const progressInterval = setInterval(() => {
     if (item.progress < 90) item.progress += 5
-  }, 1000)
+  }, 1500)
 
   const formData = new FormData()
   formData.append('file', item.rawFile, 'input.3gp')
 
-  // 🔴 請記得換成你的 Hugging Face URL
-  const response = await fetch('https://lawxstudents168-3gp2mp3-api.hf.space/api/convert', {
-    method: 'POST',
-    body: formData
-  })
+  try {
+    // 🔴 記得把這裡替換成你 Hugging Face 的真實 Direct URL！
+    // 範例：https://nickhwang-3gp2any.hf.space/api/convert
+    const response = await fetch('https://lawxstudents168-3gp2mp3-api.hf.space/api/convert', {
+      method: 'POST',
+      body: formData
+    })
 
-  clearInterval(progressInterval)
+    if (!response.ok) throw new Error('伺服器回傳失敗')
 
-  if (!response.ok) throw new Error('雲端轉檔失敗')
-
-  const blob = await response.blob()
-  item.url = URL.createObjectURL(blob)
+    const blob = await response.blob()
+    item.url = URL.createObjectURL(blob)
+  } finally {
+    clearInterval(progressInterval)
+  }
 }
 </script>
