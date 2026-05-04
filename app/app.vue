@@ -41,7 +41,7 @@
 
       <!-- 核心載入狀態提示 -->
       <div v-if="!isFfmpegLoaded && !ffmpegLoadError" class="text-center text-sm text-blue-600 animate-pulse">
-        正在初始化轉檔核心引擎，請稍候...
+        正在初始化本地轉檔核心，請稍候...
       </div>
       <div v-if="ffmpegLoadError" class="text-center text-sm text-red-600">
         本地核心載入失敗，將全面啟用雲端加速轉檔。
@@ -91,7 +91,8 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { FFmpeg } from '@ffmpeg/ffmpeg'
-import { fetchFile, toBlobURL } from '@ffmpeg/util'
+import { fetchFile } from '@ffmpeg/util'
+// ⚠️ 已經徹底移除 toBlobURL
 
 // --- 狀態管理 ---
 const fileList = ref([])
@@ -99,13 +100,12 @@ const isFfmpegLoaded = ref(false)
 const ffmpegLoadError = ref(false)
 
 let ffmpeg = null
-let currentProcessingItem = null // 追蹤目前正在用 WASM 轉檔的物件
+let currentProcessingItem = null 
 
-// --- 初始化 FFmpeg ---
+// --- 初始化 FFmpeg (純淨自託管版) ---
 onMounted(async () => {
   ffmpeg = new FFmpeg()
   
-  // 監聽 WASM 轉檔進度
   ffmpeg.on('progress', ({ ratio }) => {
     if (currentProcessingItem && currentProcessingItem.status === 'processing') {
       currentProcessingItem.progress = Math.min(Math.round(ratio * 100), 99)
@@ -113,27 +113,17 @@ onMounted(async () => {
   })
   
   try {
-    // 終極修復：1. 指定明確的 UMD 版本路徑
-    const coreURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js'
-    const wasmURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
-    
-    // 終極修復：2. 加上時間戳記作為 Cache Buster，強迫抓取最新未損壞的檔案
-    const cacheBuster = `?v=${new Date().getTime()}`
-    
-    // 終極修復：3. 使用 toBlobURL 繞過 Worker 的跨域限制
-    const blobCoreURL = await toBlobURL(`${coreURL}${cacheBuster}`, 'text/javascript')
-    const blobWasmURL = await toBlobURL(`${wasmURL}${cacheBuster}`, 'application/wasm')
-    
+    // 終極必殺技：直接指向 public 資料夾底下的核心檔案，徹底解決跨域與 Worker 阻擋問題
     await ffmpeg.load({
-      coreURL: blobCoreURL,
-      wasmURL: blobWasmURL,
+      coreURL: '/ffmpeg-core.js',
+      wasmURL: '/ffmpeg-core.wasm',
     })
     
     isFfmpegLoaded.value = true
-    console.log("✅ FFmpeg 核心載入成功！")
+    console.log("✅ 本地託管 FFmpeg 核心載入成功！")
   } catch (error) {
-    console.error("❌ FFmpeg 核心載入失敗:", error)
-    ffmpegLoadError.value = true // 標記失敗，後續所有任務交由 HF 處理
+    console.error("❌ 本地核心載入失敗:", error)
+    ffmpegLoadError.value = true // 若依然失敗，防呆機制會將所有任務導向 HF
   }
 })
 
@@ -155,8 +145,8 @@ const handleFileChange = (event) => {
     })
   })
 
-  event.target.value = '' // 清空 input
-  processQueue() // 觸發佇列
+  event.target.value = '' 
+  processQueue() 
 }
 
 // 自動將副檔名改為 mp3
@@ -180,7 +170,6 @@ const processQueue = async () => {
     const isLargeFile = item.rawFile.size > 50 * 1024 * 1024 // 50MB 門檻
 
     try {
-      // 如果是手機、大檔案，或者本地核心剛好載入失敗，一律丟給雲端
       if (isMobile || isLargeFile || !isFfmpegLoaded.value) {
         item.mode = '☁️ 雲端加速'
         await processOnHFServer(item)
@@ -199,11 +188,10 @@ const processQueue = async () => {
   isQueueRunning = false
 }
 
-// --- 轉檔路徑 A: WASM (純前端) ---
+// --- 轉檔路徑 A: WASM (本機前端) ---
 const processOnWasm = async (item) => {
   currentProcessingItem = item
   
-  // 強制更名為 input.3gp 寫入記憶體，解決 3gpp 辨識問題
   await ffmpeg.writeFile('input.3gp', await fetchFile(item.rawFile))
   
   await ffmpeg.exec(['-y', '-i', 'input.3gp', '-vn', '-ar', '44100', '-ac', '2', '-b:a', '192k', 'output.mp3'])
@@ -215,17 +203,17 @@ const processOnWasm = async (item) => {
   currentProcessingItem = null
 }
 
-// --- 轉檔路徑 B: Hugging Face API (後端) ---
+// --- 轉檔路徑 B: Hugging Face API (雲端後端) ---
 const processOnHFServer = async (item) => {
   const progressInterval = setInterval(() => {
     if (item.progress < 90) item.progress += 5
   }, 1500)
 
   const formData = new FormData()
-  formData.append('file', item.rawFile, 'input.3gp') // 傳輸時覆寫檔名
+  formData.append('file', item.rawFile, 'input.3gp') 
 
   try {
-    // 🔴 這裡請填入你的 Hugging Face API 直連網址！
+    // 已經寫入你專屬的 Hugging Face API 網址
     const response = await fetch('https://lawxstudents168-3gp2mp3-api.hf.space/api/convert', {
       method: 'POST',
       body: formData
