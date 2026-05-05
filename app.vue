@@ -18,14 +18,7 @@
                 🎵 3GP 轉檔神器
               </NuxtLink>
               
-              <NuxtLink 
-                to="/youtube" 
-                class="px-3 py-2 rounded-md text-sm font-medium transition-colors"
-                exact-active-class="bg-indigo-100 text-indigo-700"
-                inactive-class="text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-              >
-                📺 YouTube 下載器
-              </NuxtLink>
+
             </div>
           </div>
         </div>
