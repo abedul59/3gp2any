@@ -115,8 +115,8 @@ onMounted(async () => {
   try {
     // 終極必殺技：直接指向 public 資料夾底下的核心檔案，徹底解決跨域與 Worker 阻擋問題
     await ffmpeg.load({
-      coreURL: `${baseURL}/ffmpeg-core-real.js`,
-      wasmURL: `${baseURL}/ffmpeg-core-real.wasm`,
+      coreURL: '/ffmpeg-core-real.js',
+      wasmURL: '/ffmpeg-core-real.wasm',
     })
     
     isFfmpegLoaded.value = true
