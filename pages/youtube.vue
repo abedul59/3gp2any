@@ -62,7 +62,8 @@
 import { ref } from 'vue'
 
 const HF_API_BASE = 'https://lawxstudents168-yt-api.hf.space/api'
-const COBALT_API = 'https://co.wuk.sh/api/json' // 使用強大的開源解析服務
+const COBALT_API = '/api/cobalt'
+
 
 const urlInput = ref('')
 const isProcessing = ref(false)
