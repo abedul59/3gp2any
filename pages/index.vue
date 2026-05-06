@@ -41,6 +41,29 @@
       </div>
     </div>
 
+    <!-- 新增：音訊優化選項區 -->
+    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200 mt-4 space-y-4">
+      <h3 class="text-sm font-semibold text-gray-700 border-b pb-2">✨ 音訊進階優化 (可複選)</h3>
+      <div class="flex flex-col sm:flex-row gap-4">
+        
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" v-model="optimization.noiseReduction" class="text-indigo-600 rounded">
+          <span class="text-sm text-gray-700">消除背景底噪 (人聲凸顯)</span>
+        </label>
+
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" v-model="optimization.silenceRemoval" class="text-indigo-600 rounded">
+          <span class="text-sm text-gray-700">自動刪除無聲空白</span>
+        </label>
+
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" v-model="optimization.normalize" class="text-indigo-600 rounded">
+          <span class="text-sm text-gray-700">音量平穩化 (防爆音/太小聲)</span>
+        </label>
+
+      </div>
+    </div>
+
     <!-- 檔案列表與進度區塊 -->
     <div v-if="fileList.length > 0" class="bg-white shadow sm:rounded-lg">
       <div class="px-4 py-5 sm:p-6">
@@ -90,6 +113,13 @@ const isServerAwake = ref(false)
 
 // 替換為你實際的 Hugging Face Space URL
 const HF_API_URL = 'https://lawxstudents168-3gp2mp3-api.hf.space'
+
+// 新增：儲存使用者的優化選項
+const optimization = ref({
+  noiseReduction: false,
+  silenceRemoval: false,
+  normalize: false
+})
 
 // --- 伺服器喚醒機制 ---
 onMounted(async () => {
@@ -166,6 +196,8 @@ const processOnHFServer = async (item) => {
   const formData = new FormData()
   // 強制更名為 input.3gp 寫入 FormData，解決 3gpp 辨識問題
   formData.append('file', item.rawFile, 'input.3gp') 
+  // 新增：將優化選項轉為 JSON 字串傳給後端
+  formData.append('options', JSON.stringify(optimization.value))
 
   try {
     const response = await fetch(HF_API_URL + '/api/convert', {
